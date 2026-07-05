@@ -6,6 +6,7 @@ from app.repositories import (
     ArticleRepository,
     SegmentRepository,
     QuestionRepository,
+    SessionRepository,
     UserResponseRepository,
 )
 

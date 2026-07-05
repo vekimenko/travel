@@ -4,19 +4,47 @@ from typing import List, Optional
 from uuid import uuid4
 from sqlalchemy import (
     Column, String, Text, Integer, Float, DateTime,
-    ForeignKey, JSON, Boolean, ARRAY, Index, CheckConstraint,
-    func, UniqueConstraint
+    ForeignKey, JSON, Boolean, Index, CheckConstraint,
+    func, UniqueConstraint, TypeDecorator, CHAR
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from app.db.base import Base
+
+
+class GUID(TypeDecorator):
+    """Platform-independent GUID type using CHAR(32) for SQLite and UUID for PostgreSQL."""
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(PG_UUID())
+        return dialect.type_descriptor(CHAR(32))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        if dialect.name == 'postgresql':
+            return str(value)
+        if not isinstance(value, str):
+            return value.hex
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        from uuid import UUID
+        if isinstance(value, UUID):
+            return value
+        return UUID(value)
 
 
 class Article(Base):
     """Article model"""
     __tablename__ = "articles"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid4)
     title = Column(String(500), nullable=False)
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), unique=True)
@@ -24,7 +52,7 @@ class Article(Base):
     source_format = Column(String(10), default="txt")  # txt, md, html
     category = Column(String(100), nullable=True)
     difficulty_level = Column(Integer, default=3)
-    created_by = Column(UUID(as_uuid=True), nullable=True)
+    created_by = Column(GUID(), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime, nullable=True)
@@ -46,15 +74,15 @@ class Segment(Base):
     """Article segment model"""
     __tablename__ = "segments"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    article_id = Column(UUID(as_uuid=True), ForeignKey("articles.id"), nullable=False)
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    article_id = Column(GUID(), ForeignKey("articles.id"), nullable=False)
     position = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
     type = Column(String(50), nullable=False)  # introduction, premise, fact, evidence, conclusion, transition
     char_count = Column(Integer, default=0)
     difficulty = Column(Integer, default=3)
-    entities = Column(ARRAY(String), default=[])
-    keywords = Column(ARRAY(String), default=[])
+    entities = Column(JSON, default=[])
+    keywords = Column(JSON, default=[])
     metadata_ = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -77,13 +105,13 @@ class Question(Base):
     """Question model"""
     __tablename__ = "questions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    segment_id = Column(UUID(as_uuid=True), ForeignKey("segments.id"), nullable=False)
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    segment_id = Column(GUID(), ForeignKey("segments.id"), nullable=False)
     question_text = Column(Text, nullable=False)
     question_type = Column(String(50), nullable=False)  # predictive, reflective, definition, inference, application
     difficulty = Column(Integer, default=3)
-    acceptable_answers = Column(ARRAY(Text), default=[])
-    hints = Column(ARRAY(Text), default=[])
+    acceptable_answers = Column(JSON, default=[])
+    hints = Column(JSON, default=[])
     generated_by = Column(String(50), default="template")  # template, ai, manual
     quality_score = Column(Float, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -105,7 +133,7 @@ class User(Base):
     """User model (optional, for authentication)"""
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid4)
     username = Column(String(255), unique=True, nullable=True)
     email = Column(String(255), unique=True, nullable=True)
     password_hash = Column(String(255), nullable=True)
@@ -128,9 +156,9 @@ class Session(Base):
     """User reading session model"""
     __tablename__ = "sessions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    article_id = Column(UUID(as_uuid=True), ForeignKey("articles.id"), nullable=False)
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    user_id = Column(GUID(), ForeignKey("users.id"), nullable=True)
+    article_id = Column(GUID(), ForeignKey("articles.id"), nullable=False)
     started_at = Column(DateTime, server_default=func.now(), nullable=False)
     last_accessed = Column(DateTime, server_default=func.now(), onupdate=func.now())
     completed_at = Column(DateTime, nullable=True)
@@ -161,10 +189,10 @@ class UserResponse(Base):
     """User response to question model"""
     __tablename__ = "user_responses"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
-    question_id = Column(UUID(as_uuid=True), ForeignKey("questions.id"), nullable=False)
-    segment_id = Column(UUID(as_uuid=True), ForeignKey("segments.id"), nullable=False)
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    session_id = Column(GUID(), ForeignKey("sessions.id"), nullable=False)
+    question_id = Column(GUID(), ForeignKey("questions.id"), nullable=False)
+    segment_id = Column(GUID(), ForeignKey("segments.id"), nullable=False)
     user_answer = Column(Text, nullable=False)
     answer_type = Column(String(50), default="free_text")  # free_text, multiple_choice, scale
     response_time_ms = Column(Integer, nullable=True)
@@ -194,12 +222,12 @@ class AnalyticsEvent(Base):
     """Analytics event stream"""
     __tablename__ = "analytics_events"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid4)
     event_type = Column(String(50), nullable=False)
-    session_id = Column(UUID(as_uuid=True), nullable=True)
-    user_id = Column(UUID(as_uuid=True), nullable=True)
-    article_id = Column(UUID(as_uuid=True), nullable=True)
-    segment_id = Column(UUID(as_uuid=True), nullable=True)
+    session_id = Column(GUID(), nullable=True)
+    user_id = Column(GUID(), nullable=True)
+    article_id = Column(GUID(), nullable=True)
+    segment_id = Column(GUID(), nullable=True)
     event_data = Column(JSON, default={})
     timestamp = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -215,12 +243,12 @@ class AnalyticsAggregation(Base):
     """Pre-computed analytics aggregations"""
     __tablename__ = "analytics_aggregations"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid4)
     aggregation_type = Column(String(50), nullable=False)  # session, daily, weekly, article, user
     period_start = Column(DateTime, nullable=True)
     period_end = Column(DateTime, nullable=True)
-    article_id = Column(UUID(as_uuid=True), nullable=True)
-    user_id = Column(UUID(as_uuid=True), nullable=True)
+    article_id = Column(GUID(), nullable=True)
+    user_id = Column(GUID(), nullable=True)
     metrics = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
